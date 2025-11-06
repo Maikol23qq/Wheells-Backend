@@ -288,31 +288,59 @@ app.post("/api/auth/login", rateLimiter(RATE_MAX_AUTH), async (req, res) => {
       return res.status(401).json({ error: "Contraseña incorrecta" });
     }
 
-    // Si no tiene ningún rol completado, bloquear y enviar señal de onboarding
-    const hasAnyRole = user.rolesCompleted?.pasajero || user.rolesCompleted?.conductor;
-    if (!hasAnyRole) {
+    // Si no tiene ningún rol completado, NO permitir login
+    const hasPasajero = user.rolesCompleted?.pasajero || false;
+    const hasConductor = user.rolesCompleted?.conductor || false;
+    
+    if (!hasPasajero && !hasConductor) {
       return res.status(403).json({
-        error: "Onboarding incompleto",
+        error: "Debes completar el registro primero. Completa el onboarding de al menos un rol antes de iniciar sesión.",
         needOnboarding: true,
-        preferredRole: user.preferredRole || "pasajero",
-        nextRoute: (user.preferredRole === "conductor") ? "/register-driver-vehicle" : "/register-photo"
+        mustCompleteRegistration: true
       });
     }
 
-    const effectiveRole = user.currentRole || (user.rolesCompleted.conductor ? "conductor" : "pasajero");
-    user.currentRole = effectiveRole;
-    await user.save();
+    // Determinar el rol efectivo basado en el rol actual o el primer rol completado
+    let effectiveRole;
+    if (user.currentRole && ((user.currentRole === "pasajero" && hasPasajero) || (user.currentRole === "conductor" && hasConductor))) {
+      // Si tiene un currentRole válido y completado, usarlo
+      effectiveRole = user.currentRole;
+    } else if (hasPasajero && hasConductor) {
+      // Si tiene ambos, usar el preferredRole o el primero disponible
+      effectiveRole = user.preferredRole || (hasPasajero ? "pasajero" : "conductor");
+    } else if (hasPasajero) {
+      effectiveRole = "pasajero";
+    } else if (hasConductor) {
+      effectiveRole = "conductor";
+    } else {
+      // Esto no debería pasar por el check anterior, pero por seguridad
+      return res.status(403).json({
+        error: "No tienes ningún rol completado. Completa el onboarding primero.",
+        needOnboarding: true,
+        mustCompleteRegistration: true
+      });
+    }
+
+    // Actualizar el currentRole si es necesario
+    if (user.currentRole !== effectiveRole) {
+      user.currentRole = effectiveRole;
+      await user.save();
+    }
 
     const token = signAppToken({ id: user._id.toString(), role: effectiveRole });
 
-    console.log("✅ Login exitoso:", email);
+    console.log("✅ Login exitoso:", email, "- Rol:", effectiveRole);
 
     res.json({
       message: "Inicio de sesión exitoso ✅",
       token,
       role: effectiveRole,
       nombre: user.nombre,
-      userId: user._id
+      userId: user._id,
+      rolesCompleted: {
+        pasajero: hasPasajero,
+        conductor: hasConductor
+      }
     });
   } catch (error) {
     console.error("❌ Error en login:", error);
