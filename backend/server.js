@@ -494,16 +494,41 @@ app.get("/api/trips/search", async (req, res) => {
   try {
     const { from, to, date } = req.query;
     const criteria = { seatsAvailable: { $gt: 0 } };
+    
     if (from) criteria.from = new RegExp(from, "i");
     if (to) criteria.to = new RegExp(to, "i");
+    
+    // Filtrar solo viajes futuros
+    const now = new Date();
     if (date) {
       const start = new Date(date);
+      start.setHours(0, 0, 0, 0);
       const end = new Date(date);
       end.setHours(23, 59, 59, 999);
-      criteria.departureTime = { $gte: start, $lte: end };
+      // Asegurar que la fecha seleccionada sea futura
+      const minDate = start > now ? start : now;
+      criteria.departureTime = { $gte: minDate, $lte: end };
+    } else {
+      // Si no hay fecha específica, solo mostrar futuros
+      criteria.departureTime = { $gte: now };
     }
-    const trips = await Trip.find(criteria).sort({ departureTime: 1 }).limit(100).lean();
-    return res.json({ trips });
+    
+    const trips = await Trip.find(criteria)
+      .populate('driverId', 'nombre email vehicle')
+      .sort({ departureTime: 1 })
+      .limit(100)
+      .lean();
+    
+    // Formatear respuesta para incluir información del conductor
+    const formattedTrips = trips.map(trip => ({
+      ...trip,
+      driver: trip.driverId ? {
+        nombre: trip.driverId.nombre,
+        vehicle: trip.driverId.vehicle
+      } : null
+    }));
+    
+    return res.json({ trips: formattedTrips });
   } catch (e) {
     console.error("❌ Error al buscar viajes:", e);
     return res.status(500).json({ error: "Error al buscar viajes" });
