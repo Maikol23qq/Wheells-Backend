@@ -932,3 +932,77 @@ app.post("/api/trips/:tripId/requests/:requestId/reject", authRequired, async (r
     return res.status(500).json({ error: "Error al rechazar solicitud" });
   }
 });
+
+// Eliminar viaje (rol: conductor)
+app.delete("/api/trips/:tripId", authRequired, async (req, res) => {
+  try {
+    const me = await User.findById(req.user.id);
+    if (!me) return res.status(401).json({ error: "No autorizado" });
+    if (!me.rolesCompleted?.conductor) return res.status(403).json({ error: "Debes completar onboarding de conductor" });
+
+    const trip = await Trip.findById(req.params.tripId);
+    if (!trip) return res.status(404).json({ error: "Viaje no encontrado" });
+    
+    // Verificar que el viaje pertenezca al conductor
+    if (trip.driverId.toString() !== me._id.toString()) {
+      return res.status(403).json({ error: "No tienes permiso para eliminar este viaje" });
+    }
+
+    // Eliminar el viaje
+    await Trip.findByIdAndDelete(req.params.tripId);
+
+    return res.json({ 
+      message: "Viaje eliminado exitosamente ✅", 
+      tripId: trip._id
+    });
+  } catch (e) {
+    console.error("❌ Error al eliminar viaje:", e);
+    return res.status(500).json({ error: "Error al eliminar viaje" });
+  }
+});
+
+// Cancelar reserva (rol: pasajero)
+app.delete("/api/trips/:tripId/bookings", authRequired, async (req, res) => {
+  try {
+    const me = await User.findById(req.user.id);
+    if (!me) return res.status(401).json({ error: "No autorizado" });
+    if (!me.rolesCompleted?.pasajero) return res.status(403).json({ error: "Debes completar onboarding de pasajero" });
+
+    const trip = await Trip.findById(req.params.tripId);
+    if (!trip) return res.status(404).json({ error: "Viaje no encontrado" });
+
+    // Buscar la reserva del pasajero
+    const bookingIndex = trip.bookings.findIndex(
+      b => b.passengerId.toString() === me._id.toString()
+    );
+    
+    if (bookingIndex === -1) {
+      return res.status(404).json({ error: "No tienes una reserva en este viaje" });
+    }
+
+    const booking = trip.bookings[bookingIndex];
+    const seatsToFree = booking.seats || 1;
+
+    // Si la reserva estaba aceptada, liberar los asientos
+    if (booking.status === "accepted") {
+      const acceptedBookings = trip.bookings.filter(b => b.status === "accepted");
+      const totalAcceptedSeats = acceptedBookings.reduce((sum, b) => sum + (b.seats || 1), 0);
+      // Restar los asientos de esta reserva que vamos a eliminar
+      const newTotalAcceptedSeats = totalAcceptedSeats - seatsToFree;
+      trip.seatsAvailable = trip.seatsTotal - newTotalAcceptedSeats;
+    }
+
+    // Eliminar la reserva del array
+    trip.bookings.splice(bookingIndex, 1);
+    await trip.save();
+
+    return res.json({ 
+      message: `Reserva cancelada exitosamente. Se liberaron ${seatsToFree} asiento${seatsToFree > 1 ? 's' : ''} ✅`, 
+      tripId: trip._id,
+      seatsAvailable: trip.seatsAvailable
+    });
+  } catch (e) {
+    console.error("❌ Error al cancelar reserva:", e);
+    return res.status(500).json({ error: "Error al cancelar reserva" });
+  }
+});
