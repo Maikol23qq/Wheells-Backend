@@ -1155,10 +1155,12 @@ app.get("/api/chat/trips/:tripId/messages", authRequired, async (req, res) => {
       return res.status(404).json({ error: "Viaje no encontrado" });
     }
     
-    const isDriver = trip.driverId._id.toString() === meId;
-    const isPassenger = trip.bookings.some(b => 
-      b.passengerId && (b.passengerId._id?.toString() === meId || b.passengerId.toString() === meId) && b.status === "accepted"
-    );
+    const isDriver = trip.driverId && (trip.driverId._id?.toString() === meId || trip.driverId.toString() === meId);
+    const isPassenger = trip.bookings && trip.bookings.some(b => {
+      if (!b.passengerId || b.status !== "accepted") return false;
+      const passengerId = b.passengerId._id || b.passengerId;
+      return passengerId.toString() === meId;
+    });
     
     if (!isDriver && !isPassenger) {
       return res.status(403).json({ error: "No tienes acceso a esta conversación" });
