@@ -69,9 +69,10 @@ app.use((req, res, next) => {
 // 🚦 Rate limiting por IP (sin dependencias)
 // =====================
 const RATE_WINDOW_MS = 60_000; // 1 minuto
-const RATE_MAX = 60; // 60 req/min por IP (global simple)
-const RATE_MAX_AUTH = 10; // 10 req/min para /api/auth/*
+const RATE_MAX = 100; // 100 req/min por IP (global simple)
+const RATE_MAX_AUTH = 30; // 30 req/min para /api/auth/* (más permisivo para login)
 const ipHits = new Map();
+const authHits = new Map(); // Rate limiter separado para auth
 
 function rateLimiter(maxPerWindow) {
   return (req, res, next) => {
@@ -86,13 +87,41 @@ function rateLimiter(maxPerWindow) {
     ipHits.set(ip, entry);
     if (entry.count > maxPerWindow) {
       res.setHeader("Retry-After", Math.ceil((entry.resetAt - now) / 1000).toString());
-      return res.status(429).json({ error: "Demasiadas solicitudes, intenta más tarde" });
+      return res.status(429).json({ 
+        error: "Demasiadas solicitudes, intenta más tarde",
+        retryAfter: Math.ceil((entry.resetAt - now) / 1000)
+      });
     }
     next();
   };
 }
 
-// Global suave y específico para auth
+// Rate limiter específico para auth (más permisivo)
+function authRateLimiter(maxPerWindow) {
+  return (req, res, next) => {
+    const ip = req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() || req.socket.remoteAddress || "unknown";
+    const now = Date.now();
+    const entry = authHits.get(ip) || { count: 0, resetAt: now + RATE_WINDOW_MS };
+    if (now > entry.resetAt) {
+      entry.count = 0;
+      entry.resetAt = now + RATE_WINDOW_MS;
+    }
+    entry.count += 1;
+    authHits.set(ip, entry);
+    if (entry.count > maxPerWindow) {
+      const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+      res.setHeader("Retry-After", retryAfter.toString());
+      return res.status(429).json({ 
+        error: "Demasiados intentos de inicio de sesión. Por favor espera un momento.",
+        message: `Intenta de nuevo en ${retryAfter} segundos`,
+        retryAfter: retryAfter
+      });
+    }
+    next();
+  };
+}
+
+// Global suave
 app.use(rateLimiter(RATE_MAX));
 
 // =====================
@@ -158,7 +187,7 @@ app.get("/api/test", async (req, res) => {
 // =====================
 // 🧍‍♀️ Registro de usuario - CON DEBUG COMPLETO
 // =====================
-app.post("/api/auth/register", rateLimiter(RATE_MAX_AUTH), async (req, res) => {
+app.post("/api/auth/register", authRateLimiter(RATE_MAX_AUTH), async (req, res) => {
   try {
     // ✅ DEBUG COMPLETO - DETALLE DE CAMPOS
     console.log("=== 🐛 DEBUG REGISTRO ===");
@@ -268,7 +297,7 @@ app.post("/api/auth/register", rateLimiter(RATE_MAX_AUTH), async (req, res) => {
 // =====================
 // 🔐 Inicio de sesión
 // =====================
-app.post("/api/auth/login", rateLimiter(RATE_MAX_AUTH), async (req, res) => {
+app.post("/api/auth/login", authRateLimiter(RATE_MAX_AUTH), async (req, res) => {
   try {
     const { email, password } = req.body;
     const isValidEmail = (v) => /.+@.+\..+/.test(v);
