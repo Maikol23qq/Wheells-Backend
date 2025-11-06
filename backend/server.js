@@ -204,7 +204,7 @@ app.post("/api/auth/register", authRateLimiter(RATE_MAX_AUTH), async (req, res) 
     // ✅ CONVERTIR 'name' A 'nombre' - Primero desestructurar
     const { name, email, password, telefono, idUniversitario, role } = req.body;
     const nombre = name;
-
+    
     // Verificar campos obligatorios
     const camposRequeridos = ['name', 'email', 'password'];
     const camposVacios = camposRequeridos.filter(campo => !req.body[campo] || req.body[campo].toString().trim() === '');
@@ -353,8 +353,8 @@ app.post("/api/auth/login", authRateLimiter(RATE_MAX_AUTH), async (req, res) => 
 
     // Actualizar el currentRole si es necesario
     if (user.currentRole !== effectiveRole) {
-      user.currentRole = effectiveRole;
-      await user.save();
+    user.currentRole = effectiveRole;
+    await user.save();
     }
 
     const token = signAppToken({ id: user._id.toString(), role: effectiveRole });
@@ -385,6 +385,11 @@ app.post("/api/onboarding/pasajero", authRequired, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
+
+    // Guardar foto si viene en el body
+    if (req.body.photoUrl) {
+      user.photoUrl = req.body.photoUrl;
+    }
 
     user.rolesCompleted.pasajero = true;
     user.status = "active";
@@ -418,10 +423,19 @@ app.post("/api/onboarding/conductor", authRequired, async (req, res) => {
     user.status = "active";
     if (!user.currentRole) user.currentRole = "conductor";
     if (req.body) {
+      // Guardar foto del usuario si viene
+      if (req.body.photoUrl) {
+        user.photoUrl = req.body.photoUrl;
+      }
+      // Guardar datos del vehículo
       user.vehicle.marca = req.body.marca || user.vehicle.marca;
       user.vehicle.modelo = req.body.modelo || user.vehicle.modelo;
       user.vehicle.anio = req.body.anio || user.vehicle.anio;
       user.vehicle.placa = req.body.placa || user.vehicle.placa;
+      // Guardar foto del vehículo si viene
+      if (req.body.vehiclePhotoUrl) {
+        user.vehicle.photoUrl = req.body.vehiclePhotoUrl;
+      }
     }
     await user.save();
 
@@ -445,14 +459,15 @@ app.post("/api/onboarding/conductor", authRequired, async (req, res) => {
 // =====================
 app.get("/api/user/me", authRequired, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).lean();
-    if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
+  const user = await User.findById(req.user.id).lean();
+  if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
     return res.json({
       id: user._id,
       nombre: user.nombre,
       email: user.email,
       telefono: user.telefono || "",
       idUniversitario: user.idUniversitario || "",
+      photoUrl: user.photoUrl || "",
       rolesCompleted: user.rolesCompleted,
       currentRole: user.currentRole,
       preferredRole: user.preferredRole,
@@ -511,10 +526,10 @@ app.put("/api/user/me", authRequired, async (req, res) => {
         rolesCompleted: user.rolesCompleted,
         currentRole: user.currentRole,
         preferredRole: user.preferredRole,
-        status: user.status,
-        vehicle: user.vehicle
+    status: user.status,
+    vehicle: user.vehicle
       }
-    });
+  });
   } catch (e) {
     console.error("❌ Error al actualizar perfil:", e);
     return res.status(500).json({ error: "Error al actualizar perfil" });
@@ -580,12 +595,12 @@ async function startServer() {
     process.exit(1);
   }
 
-  app.listen(PORT, () => {
-    console.log(`🔥 Servidor escuchando en puerto ${PORT}`);
+app.listen(PORT, () => {
+  console.log(`🔥 Servidor escuchando en puerto ${PORT}`);
     console.log(`🗃️ Base de datos: MongoDB conectado`);
-    console.log(`🌐 CORS permitido para: ${allowedOrigins.join(', ')}`);
-    console.log(`📡 Endpoint de prueba: http://localhost:${PORT}/api/test`);
-  });
+  console.log(`🌐 CORS permitido para: ${allowedOrigins.join(', ')}`);
+  console.log(`📡 Endpoint de prueba: http://localhost:${PORT}/api/test`);
+});
 }
 
 // Manejar eventos de conexión de MongoDB
@@ -662,7 +677,7 @@ app.get("/api/trips/search", async (req, res) => {
     }
     
     const trips = await Trip.find(criteria)
-      .populate('driverId', 'nombre email vehicle')
+      .populate('driverId', 'nombre email photoUrl vehicle')
       .populate('bookings.passengerId', 'nombre email')
       .sort({ departureTime: 1 })
       .limit(100)
@@ -679,7 +694,8 @@ app.get("/api/trips/search", async (req, res) => {
           seatsAvailable: availableSeats,
           driver: trip.driverId ? {
             nombre: trip.driverId.nombre,
-            vehicle: trip.driverId.vehicle
+            photoUrl: trip.driverId.photoUrl || "",
+            vehicle: trip.driverId.vehicle || {}
           } : null
         };
       })
@@ -697,25 +713,30 @@ app.get("/api/trips/my", authRequired, async (req, res) => {
   try {
     const meId = req.user.id;
     const asDriver = await Trip.find({ driverId: meId })
-      .populate('bookings.passengerId', 'nombre email telefono idUniversitario')
+      .populate('bookings.passengerId', 'nombre email telefono idUniversitario photoUrl')
+      .populate('driverId', 'nombre email photoUrl vehicle')
       .sort({ createdAt: -1 })
       .lean();
     
     // Para pasajero, filtrar solo sus solicitudes
     const asPassenger = await Trip.find({ "bookings.passengerId": meId })
-      .populate('driverId', 'nombre email vehicle')
+      .populate('driverId', 'nombre email photoUrl vehicle')
       .sort({ createdAt: -1 })
       .lean();
     
     // Formatear para incluir el estado de la solicitud del pasajero
     const formattedAsPassenger = asPassenger.map(trip => {
-      const myBooking = trip.bookings.find(b => b.passengerId.toString() === meId);
+      const myBooking = trip.bookings.find(b => {
+        const passengerId = b.passengerId._id || b.passengerId;
+        return passengerId.toString() === meId;
+      });
       return {
         ...trip,
         myBookingStatus: myBooking?.status || null,
         driver: trip.driverId ? {
           nombre: trip.driverId.nombre,
-          vehicle: trip.driverId.vehicle
+          photoUrl: trip.driverId.photoUrl || "",
+          vehicle: trip.driverId.vehicle || {}
         } : null
       };
     });
@@ -825,7 +846,7 @@ app.post("/api/trips/:id/book", authRequired, async (req, res) => {
         
         // Actualizar la cantidad de asientos
         trip.bookings[existingRequestIndex].seats = seatsRequested;
-        await trip.save();
+    await trip.save();
         
         return res.json({ 
           message: `Solicitud actualizada. Ahora solicitas ${seatsRequested} asiento${seatsRequested > 1 ? 's' : ''}.`, 

@@ -13,7 +13,8 @@ const VehicleSchema = new mongoose.Schema(
     marca: { type: String },
     modelo: { type: String },
     anio: { type: String },
-    placa: { type: String }
+    placa: { type: String },
+    photoUrl: { type: String }
   },
   { _id: false }
 );
@@ -25,6 +26,7 @@ const UserSchema = new mongoose.Schema(
     password: { type: String, required: true },
     telefono: { type: String },
     idUniversitario: { type: String },
+    photoUrl: { type: String },
     rolesCompleted: { type: RolesCompletedSchema, default: () => ({}) },
     currentRole: { type: String, enum: ["pasajero", "conductor", null], default: null },
     preferredRole: { type: String, enum: ["pasajero", "conductor"], default: "pasajero" },
