@@ -1199,10 +1199,12 @@ app.post("/api/chat/trips/:tripId/messages", authRequired, async (req, res) => {
       return res.status(404).json({ error: "Viaje no encontrado" });
     }
     
-    const isDriver = trip.driverId._id.toString() === meId;
-    const isPassenger = trip.bookings.some(b => 
-      b.passengerId && (b.passengerId._id?.toString() === meId || b.passengerId.toString() === meId) && b.status === "accepted"
-    );
+    const isDriver = trip.driverId && (trip.driverId._id?.toString() === meId || trip.driverId.toString() === meId);
+    const isPassenger = trip.bookings && trip.bookings.some(b => {
+      if (!b.passengerId || b.status !== "accepted") return false;
+      const passengerId = b.passengerId._id || b.passengerId;
+      return passengerId.toString() === meId;
+    });
     
     if (!isDriver && !isPassenger) {
       return res.status(403).json({ error: "No tienes acceso a esta conversación" });
@@ -1212,19 +1214,28 @@ app.post("/api/chat/trips/:tripId/messages", authRequired, async (req, res) => {
     let actualReceiverId;
     if (isDriver) {
       // Si soy conductor, el receptor es el pasajero
-      const acceptedBooking = trip.bookings.find(b => b.status === "accepted");
-      if (!acceptedBooking || !acceptedBooking.passengerId) {
-        return res.status(400).json({ error: "No hay pasajeros aceptados en este viaje" });
+      // Si se especificó receiverId, usarlo; si no, usar el primer pasajero aceptado
+      if (receiverId) {
+        const booking = trip.bookings.find(b => {
+          if (b.status !== "accepted" || !b.passengerId) return false;
+          const passengerId = b.passengerId._id || b.passengerId;
+          return passengerId.toString() === receiverId.toString();
+        });
+        if (!booking) {
+          return res.status(400).json({ error: "Pasajero no encontrado o no aceptado en este viaje" });
+        }
+        actualReceiverId = booking.passengerId._id || booking.passengerId;
+      } else {
+        // Si no se especifica, usar el primer pasajero aceptado
+        const acceptedBooking = trip.bookings.find(b => b.status === "accepted" && b.passengerId);
+        if (!acceptedBooking || !acceptedBooking.passengerId) {
+          return res.status(400).json({ error: "No hay pasajeros aceptados en este viaje" });
+        }
+        actualReceiverId = acceptedBooking.passengerId._id || acceptedBooking.passengerId;
       }
-      actualReceiverId = acceptedBooking.passengerId._id || acceptedBooking.passengerId;
     } else {
       // Si soy pasajero, el receptor es el conductor
-      actualReceiverId = trip.driverId._id;
-    }
-    
-    // Si se especificó receiverId, validar que coincida
-    if (receiverId && receiverId.toString() !== actualReceiverId.toString()) {
-      return res.status(400).json({ error: "Receptor inválido" });
+      actualReceiverId = trip.driverId._id || trip.driverId;
     }
     
     // Crear mensaje
