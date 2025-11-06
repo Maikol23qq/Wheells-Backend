@@ -4,7 +4,7 @@ services:
     name: wheels-backend
     runtime: node
     plan: free
-    rootDir: Wheells-Backend/backend
+    rootDir: backend
     buildCommand: npm install
     startCommand: npm start
     envVars:
@@ -15,5 +15,5 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: FRONTEND_URL
-        sync: false  # Configura esto manualmente con tu URL del frontend
+        value: https://wheells-fronted-3e3b.vercel.app
 
