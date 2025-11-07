@@ -470,44 +470,104 @@ app.post("/api/auth/register-complete", async (req, res) => {
     // Normalizar email
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Verificar que el correo no esté en uso
+    // Verificar si el usuario ya existe
     const existingUser = await User.findOne({ email: normalizedEmail });
+    
+    let user;
+    let isNewUser = false;
+
     if (existingUser) {
-      console.log("❌ Intento de registro con email ya existente:", normalizedEmail);
-      return res.status(400).json({ error: "El correo ya está registrado" });
-    }
-
-    // Hashear contraseña
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    console.log("📝 Intentando crear usuario pasajero:", { email: normalizedEmail, nombre });
-
-    // Crear usuario completo con onboarding de pasajero ya completado
-    let newUser;
-    try {
-      newUser = await User.create({
-        nombre: nombre.trim(),
-        email: normalizedEmail,
-        password: hashedPassword,
-        telefono: telefono?.trim() || "",
-        idUniversitario: idUniversitario?.trim() || "",
-        photoUrl: photoUrl || "",
-        rolesCompleted: { pasajero: true, conductor: false },
-        currentRole: "pasajero",
-        status: "active",
-        preferredRole: "pasajero"
-      });
-      console.log("✅ Usuario pasajero creado exitosamente:", newUser._id, newUser.email);
-    } catch (createError) {
-      console.error("❌ Error al crear usuario:", createError);
-      if (createError.name === 'MongoServerError' && createError.code === 11000) {
-        return res.status(400).json({ error: "El correo ya está registrado" });
+      // Usuario existente: verificar contraseña y agregar rol pasajero
+      console.log("📝 Usuario existente encontrado, verificando contraseña:", normalizedEmail);
+      
+      const validPassword = await bcrypt.compare(password, existingUser.password);
+      if (!validPassword) {
+        console.log("❌ Contraseña incorrecta para usuario existente:", normalizedEmail);
+        return res.status(401).json({ error: "Contraseña incorrecta. Si ya tienes una cuenta, usa la contraseña correcta." });
       }
-      throw createError;
+
+      // Si ya tiene el rol pasajero completado, informar
+      if (existingUser.rolesCompleted?.pasajero) {
+        console.log("ℹ️ Usuario ya tiene rol pasajero completado:", normalizedEmail);
+        // Actualizar datos si es necesario
+        if (photoUrl && (!existingUser.photoUrl || photoUrl !== existingUser.photoUrl)) {
+          existingUser.photoUrl = photoUrl;
+        }
+        if (nombre && nombre.trim() !== existingUser.nombre) {
+          existingUser.nombre = nombre.trim();
+        }
+        if (telefono !== undefined) {
+          existingUser.telefono = telefono?.trim() || "";
+        }
+        if (idUniversitario !== undefined) {
+          existingUser.idUniversitario = idUniversitario?.trim() || "";
+        }
+        await existingUser.save();
+        
+        const token = signAppToken({ id: existingUser._id.toString(), role: "pasajero" });
+        return res.json({
+          message: "Rol pasajero ya estaba completado. Datos actualizados ✅",
+          token,
+          role: "pasajero",
+          nombre: existingUser.nombre,
+          userId: existingUser._id
+        });
+      }
+
+      // Agregar rol pasajero al usuario existente
+      console.log("➕ Agregando rol pasajero a usuario existente:", normalizedEmail);
+      existingUser.rolesCompleted = {
+        pasajero: true,
+        conductor: existingUser.rolesCompleted?.conductor || false
+      };
+      
+      // Actualizar datos
+      if (photoUrl) existingUser.photoUrl = photoUrl;
+      if (nombre && nombre.trim()) existingUser.nombre = nombre.trim();
+      if (telefono !== undefined) existingUser.telefono = telefono?.trim() || "";
+      if (idUniversitario !== undefined) existingUser.idUniversitario = idUniversitario?.trim() || "";
+      
+      // Si no tiene currentRole o es conductor, cambiar a pasajero
+      if (!existingUser.currentRole || existingUser.currentRole === "conductor") {
+        existingUser.currentRole = "pasajero";
+      }
+      
+      existingUser.status = "active";
+      await existingUser.save();
+      user = existingUser;
+      console.log("✅ Rol pasajero agregado exitosamente a usuario existente:", user.email);
+    } else {
+      // Usuario nuevo: crear con rol pasajero
+      console.log("📝 Creando nuevo usuario pasajero:", { email: normalizedEmail, nombre });
+      
+      const hashedPassword = await bcrypt.hash(password, 10);
+      
+      try {
+        user = await User.create({
+          nombre: nombre.trim(),
+          email: normalizedEmail,
+          password: hashedPassword,
+          telefono: telefono?.trim() || "",
+          idUniversitario: idUniversitario?.trim() || "",
+          photoUrl: photoUrl || "",
+          rolesCompleted: { pasajero: true, conductor: false },
+          currentRole: "pasajero",
+          status: "active",
+          preferredRole: "pasajero"
+        });
+        isNewUser = true;
+        console.log("✅ Usuario pasajero creado exitosamente:", user._id, user.email);
+      } catch (createError) {
+        console.error("❌ Error al crear usuario:", createError);
+        if (createError.name === 'MongoServerError' && createError.code === 11000) {
+          return res.status(400).json({ error: "El correo ya está registrado" });
+        }
+        throw createError;
+      }
     }
 
     // Verificar que realmente se guardó
-    const savedUser = await User.findById(newUser._id);
+    const savedUser = await User.findById(user._id);
     if (!savedUser) {
       console.error("❌ ERROR: El usuario no se guardó en la base de datos");
       return res.status(500).json({ error: "Error al guardar usuario en la base de datos" });
@@ -515,14 +575,14 @@ app.post("/api/auth/register-complete", async (req, res) => {
     console.log("✅ Usuario verificado en BD:", savedUser.email);
 
     // Generar token
-    const token = signAppToken({ id: newUser._id.toString(), role: "pasajero" });
+    const token = signAppToken({ id: user._id.toString(), role: "pasajero" });
 
-    return res.status(201).json({
-      message: "Registro completado exitosamente ✅",
+    return res.status(isNewUser ? 201 : 200).json({
+      message: isNewUser ? "Registro completado exitosamente ✅" : "Rol pasajero agregado exitosamente ✅",
       token,
       role: "pasajero",
-      nombre: newUser.nombre,
-      userId: newUser._id
+      nombre: user.nombre,
+      userId: user._id
     });
   } catch (error) {
     console.error("❌ Error al registrar usuario completo:", error);
@@ -587,51 +647,130 @@ app.post("/api/auth/register-complete-conductor", async (req, res) => {
     // Normalizar email
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Verificar que el correo no esté en uso
+    // Verificar si el usuario ya existe
     const existingUser = await User.findOne({ email: normalizedEmail });
+    
+    let user;
+    let isNewUser = false;
+
     if (existingUser) {
-      console.log("❌ Intento de registro con email ya existente:", normalizedEmail);
-      return res.status(400).json({ error: "El correo ya está registrado" });
-    }
-
-    // Hashear contraseña
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    console.log("📝 Intentando crear usuario conductor:", { email: normalizedEmail, nombre });
-
-    // Crear usuario completo con onboarding de conductor ya completado
-    let newUser;
-    try {
-      newUser = await User.create({
-        nombre: nombre.trim(),
-        email: normalizedEmail,
-        password: hashedPassword,
-        telefono: telefono?.trim() || "",
-        idUniversitario: idUniversitario?.trim() || "",
-        photoUrl: photoUrl || "",
-        rolesCompleted: { pasajero: false, conductor: true },
-        currentRole: "conductor",
-        status: "active",
-        preferredRole: "conductor",
-        vehicle: {
-          marca: marca?.trim() || "",
-          modelo: modelo?.trim() || "",
-          anio: anio?.trim() || "",
-          placa: placa?.trim() || "",
-          photoUrl: vehiclePhotoUrl || ""
-        }
-      });
-      console.log("✅ Usuario conductor creado exitosamente:", newUser._id, newUser.email);
-    } catch (createError) {
-      console.error("❌ Error al crear usuario:", createError);
-      if (createError.name === 'MongoServerError' && createError.code === 11000) {
-        return res.status(400).json({ error: "El correo ya está registrado" });
+      // Usuario existente: verificar contraseña y agregar rol conductor
+      console.log("📝 Usuario existente encontrado, verificando contraseña:", normalizedEmail);
+      
+      const validPassword = await bcrypt.compare(password, existingUser.password);
+      if (!validPassword) {
+        console.log("❌ Contraseña incorrecta para usuario existente:", normalizedEmail);
+        return res.status(401).json({ error: "Contraseña incorrecta. Si ya tienes una cuenta, usa la contraseña correcta." });
       }
-      throw createError;
+
+      // Si ya tiene el rol conductor completado, informar y actualizar datos del vehículo
+      if (existingUser.rolesCompleted?.conductor) {
+        console.log("ℹ️ Usuario ya tiene rol conductor completado:", normalizedEmail);
+        // Actualizar datos si es necesario
+        if (photoUrl && (!existingUser.photoUrl || photoUrl !== existingUser.photoUrl)) {
+          existingUser.photoUrl = photoUrl;
+        }
+        if (nombre && nombre.trim() !== existingUser.nombre) {
+          existingUser.nombre = nombre.trim();
+        }
+        if (telefono !== undefined) {
+          existingUser.telefono = telefono?.trim() || "";
+        }
+        if (idUniversitario !== undefined) {
+          existingUser.idUniversitario = idUniversitario?.trim() || "";
+        }
+        // Actualizar información del vehículo
+        if (marca || modelo || anio || placa || vehiclePhotoUrl) {
+          existingUser.vehicle = {
+            marca: marca?.trim() || existingUser.vehicle?.marca || "",
+            modelo: modelo?.trim() || existingUser.vehicle?.modelo || "",
+            anio: anio?.trim() || existingUser.vehicle?.anio || "",
+            placa: placa?.trim() || existingUser.vehicle?.placa || "",
+            photoUrl: vehiclePhotoUrl || existingUser.vehicle?.photoUrl || ""
+          };
+        }
+        await existingUser.save();
+        
+        const token = signAppToken({ id: existingUser._id.toString(), role: "conductor" });
+        return res.json({
+          message: "Rol conductor ya estaba completado. Datos actualizados ✅",
+          token,
+          role: "conductor",
+          nombre: existingUser.nombre,
+          userId: existingUser._id
+        });
+      }
+
+      // Agregar rol conductor al usuario existente
+      console.log("➕ Agregando rol conductor a usuario existente:", normalizedEmail);
+      existingUser.rolesCompleted = {
+        pasajero: existingUser.rolesCompleted?.pasajero || false,
+        conductor: true
+      };
+      
+      // Actualizar datos
+      if (photoUrl) existingUser.photoUrl = photoUrl;
+      if (nombre && nombre.trim()) existingUser.nombre = nombre.trim();
+      if (telefono !== undefined) existingUser.telefono = telefono?.trim() || "";
+      if (idUniversitario !== undefined) existingUser.idUniversitario = idUniversitario?.trim() || "";
+      
+      // Agregar/actualizar información del vehículo
+      existingUser.vehicle = {
+        marca: marca?.trim() || "",
+        modelo: modelo?.trim() || "",
+        anio: anio?.trim() || "",
+        placa: placa?.trim() || "",
+        photoUrl: vehiclePhotoUrl || ""
+      };
+      
+      // Si no tiene currentRole o es pasajero, cambiar a conductor
+      if (!existingUser.currentRole || existingUser.currentRole === "pasajero") {
+        existingUser.currentRole = "conductor";
+      }
+      
+      existingUser.status = "active";
+      await existingUser.save();
+      user = existingUser;
+      console.log("✅ Rol conductor agregado exitosamente a usuario existente:", user.email);
+    } else {
+      // Usuario nuevo: crear con rol conductor
+      console.log("📝 Creando nuevo usuario conductor:", { email: normalizedEmail, nombre });
+      
+      const hashedPassword = await bcrypt.hash(password, 10);
+      
+      try {
+        user = await User.create({
+          nombre: nombre.trim(),
+          email: normalizedEmail,
+          password: hashedPassword,
+          telefono: telefono?.trim() || "",
+          idUniversitario: idUniversitario?.trim() || "",
+          photoUrl: photoUrl || "",
+          rolesCompleted: { pasajero: false, conductor: true },
+          currentRole: "conductor",
+          status: "active",
+          preferredRole: "conductor",
+          vehicle: {
+            marca: marca?.trim() || "",
+            modelo: modelo?.trim() || "",
+            anio: anio?.trim() || "",
+            placa: placa?.trim() || "",
+            photoUrl: vehiclePhotoUrl || ""
+          }
+        });
+        isNewUser = true;
+        console.log("✅ Usuario conductor creado exitosamente:", user._id, user.email);
+      } catch (createError) {
+        console.error("❌ Error al crear usuario:", createError);
+        if (createError.name === 'MongoServerError' && createError.code === 11000) {
+          return res.status(400).json({ error: "El correo ya está registrado" });
+        }
+        throw createError;
+      }
     }
 
     // Verificar que realmente se guardó
-    const savedUser = await User.findById(newUser._id);
+    const savedUser = await User.findById(user._id);
     if (!savedUser) {
       console.error("❌ ERROR: El usuario no se guardó en la base de datos");
       return res.status(500).json({ error: "Error al guardar usuario en la base de datos" });
@@ -639,14 +778,14 @@ app.post("/api/auth/register-complete-conductor", async (req, res) => {
     console.log("✅ Usuario verificado en BD:", savedUser.email);
 
     // Generar token
-    const token = signAppToken({ id: newUser._id.toString(), role: "conductor" });
+    const token = signAppToken({ id: user._id.toString(), role: "conductor" });
 
-    return res.status(201).json({
-      message: "Registro completado exitosamente ✅",
+    return res.status(isNewUser ? 201 : 200).json({
+      message: isNewUser ? "Registro completado exitosamente ✅" : "Rol conductor agregado exitosamente ✅",
       token,
       role: "conductor",
-      nombre: newUser.nombre,
-      userId: newUser._id
+      nombre: user.nombre,
+      userId: user._id
     });
   } catch (error) {
     console.error("❌ Error al registrar usuario completo (conductor):", error);
