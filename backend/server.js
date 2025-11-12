@@ -846,7 +846,8 @@ app.post("/api/onboarding/pasajero", authRequired, async (req, res) => {
 
     user.rolesCompleted.pasajero = true;
     user.status = "active";
-    if (!user.currentRole) user.currentRole = "pasajero";
+    // Actualizar currentRole a pasajero si no tiene rol o si está cambiando de rol
+    user.currentRole = "pasajero";
     await user.save();
 
     // Generar nuevo token con el rol actualizado
@@ -874,7 +875,8 @@ app.post("/api/onboarding/conductor", authRequired, async (req, res) => {
 
     user.rolesCompleted.conductor = true;
     user.status = "active";
-    if (!user.currentRole) user.currentRole = "conductor";
+    // Actualizar currentRole a conductor si no tiene rol o si está cambiando de rol
+    user.currentRole = "conductor";
     if (req.body) {
       // Guardar foto del usuario si viene
       if (req.body.photoUrl) {
@@ -1039,16 +1041,35 @@ app.put("/api/user/role", authRequired, async (req, res) => {
   if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
   
   // Si el rol no está completado, generar token de onboarding y redirigir
+  // Incluir datos del usuario para prellenar formularios
   if (!user.rolesCompleted[role]) {
     const onboardingToken = signAppToken({ id: user._id.toString(), onboarding: true });
     const nextRoute = role === "conductor" ? "/register-driver-vehicle" : "/register-photo";
+    
+    // Preparar datos del usuario para prellenar formularios
+    const userData = {
+      nombre: user.nombre || "",
+      email: user.email || "",
+      telefono: user.telefono || "",
+      idUniversitario: user.idUniversitario || "",
+      photoUrl: user.photoUrl || "",
+      // Si es conductor, incluir datos del vehículo si existen
+      ...(role === "conductor" && user.vehicle ? {
+        marca: user.vehicle.marca || "",
+        modelo: user.vehicle.modelo || "",
+        anio: user.vehicle.anio || "",
+        placa: user.vehicle.placa || "",
+        vehiclePhotoUrl: user.vehicle.photoUrl || ""
+      } : {})
+    };
     
     return res.status(200).json({ 
       needOnboarding: true,
       message: `Necesitas completar el onboarding de ${role}`,
       onboardingToken,
       nextRoute,
-      role: role
+      role: role,
+      userData: userData // Datos del usuario para prellenar formularios
     });
   }
   
