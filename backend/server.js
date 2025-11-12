@@ -308,6 +308,7 @@ app.post("/api/auth/register", authRateLimiter(RATE_MAX_AUTH), async (req, res) 
 // 🔐 Inicio de sesión
 // =====================
 app.post("/api/auth/login", authRateLimiter(RATE_MAX_AUTH), async (req, res) => {
+  const startTime = Date.now();
   try {
     const { email, password } = req.body;
     
@@ -332,13 +333,24 @@ app.post("/api/auth/login", authRateLimiter(RATE_MAX_AUTH), async (req, res) => 
       });
     }
 
-    const user = await User.findOne({ email: email.trim().toLowerCase() });
+    // Optimización: Solo seleccionar campos necesarios para mejorar rendimiento
+    const normalizedEmail = email.trim().toLowerCase();
+    const queryStart = Date.now();
+    const user = await User.findOne({ email: normalizedEmail })
+      .select('password nombre rolesCompleted currentRole preferredRole _id')
+      .lean(); // Usar lean() para obtener objeto plano más rápido
+    
     if (!user) {
       console.log("❌ Usuario no encontrado:", email);
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
+    console.log(`⏱️ Query DB: ${Date.now() - queryStart}ms`);
 
+    // Verificar contraseña
+    const bcryptStart = Date.now();
     const validPassword = await bcrypt.compare(password, user.password);
+    console.log(`⏱️ Bcrypt compare: ${Date.now() - bcryptStart}ms`);
+    
     if (!validPassword) {
       console.log("❌ Contraseña incorrecta para:", email);
       return res.status(401).json({ error: "Contraseña incorrecta" });
@@ -377,15 +389,21 @@ app.post("/api/auth/login", authRateLimiter(RATE_MAX_AUTH), async (req, res) => 
       });
     }
 
-    // Actualizar el currentRole si es necesario
+    // Optimización: Solo actualizar si es necesario y usar updateOne en lugar de save
     if (user.currentRole !== effectiveRole) {
-    user.currentRole = effectiveRole;
-    await user.save();
+      const updateStart = Date.now();
+      // Usar updateOne en lugar de save para mejor rendimiento
+      await User.updateOne(
+        { _id: user._id },
+        { $set: { currentRole: effectiveRole } }
+      );
+      console.log(`⏱️ Update currentRole: ${Date.now() - updateStart}ms`);
     }
 
     const token = signAppToken({ id: user._id.toString(), role: effectiveRole });
 
-    console.log("✅ Login exitoso:", email, "- Rol:", effectiveRole);
+    const totalTime = Date.now() - startTime;
+    console.log(`✅ Login exitoso: ${email} - Rol: ${effectiveRole} - Tiempo total: ${totalTime}ms`);
 
     res.json({
       message: "Inicio de sesión exitoso ✅",
@@ -399,7 +417,8 @@ app.post("/api/auth/login", authRateLimiter(RATE_MAX_AUTH), async (req, res) => 
       }
     });
   } catch (error) {
-    console.error("❌ Error en login:", error);
+    const totalTime = Date.now() - startTime;
+    console.error(`❌ Error en login después de ${totalTime}ms:`, error);
     res.status(500).json({ error: "Error al iniciar sesión" });
   }
 });
