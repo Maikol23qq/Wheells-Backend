@@ -10,13 +10,14 @@ const RolesCompletedSchema = new mongoose.Schema(
 
 const VehicleSchema = new mongoose.Schema(
   {
-    marca: { type: String },
-    modelo: { type: String },
-    anio: { type: String },
-    placa: { type: String },
-    photoUrl: { type: String }
+    marca: { type: String, required: true },
+    modelo: { type: String, required: true },
+    anio: { type: String, required: true },
+    placa: { type: String, required: true },
+    photoUrl: { type: String },
+    soatPhotoUrl: { type: String } // Foto del SOAT
   },
-  { _id: false }
+  { _id: true, timestamps: true }
 );
 
 const UserSchema = new mongoose.Schema(
@@ -31,7 +32,7 @@ const UserSchema = new mongoose.Schema(
     currentRole: { type: String, enum: ["pasajero", "conductor", null], default: null },
     preferredRole: { type: String, enum: ["pasajero", "conductor"], default: "pasajero" },
     status: { type: String, enum: ["pending", "active"], default: "pending" },
-    vehicle: { type: VehicleSchema, default: () => ({}) }
+    vehicles: { type: [VehicleSchema], default: [] } // Array de vehículos
   },
   { timestamps: true }
 );

@@ -14,6 +14,7 @@ const BookingSchema = new mongoose.Schema(
 const TripSchema = new mongoose.Schema(
   {
     driverId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    vehicleId: { type: mongoose.Schema.Types.ObjectId, ref: "User.vehicles", required: false }, // ID del vehículo usado
     from: { type: String, required: true },
     to: { type: String, required: true },
     route: { type: String, default: "" }, // Ruta/paradas del viaje
