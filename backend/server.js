@@ -608,7 +608,6 @@ app.post("/api/auth/login", authRateLimiter(RATE_MAX_AUTH), async (req, res) => 
     // Hacer el update de forma asíncrona para no bloquear la respuesta
     if (user.currentRole !== effectiveRole) {
       // Actualizar en segundo plano sin esperar (fire and forget)
-      // Esto mejora el tiempo de respuesta del login
       User.updateOne(
         { _id: user._id },
         { $set: { currentRole: effectiveRole } }
@@ -641,5 +640,3 @@ app.post("/api/auth/login", authRateLimiter(RATE_MAX_AUTH), async (req, res) => 
     res.status(500).json({ error: "Error al iniciar sesión" });
   }
 });
-
-// ... existing code ...
